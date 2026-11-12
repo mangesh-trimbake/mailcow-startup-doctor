@@ -14,7 +14,7 @@ class ServiceResult:
 
 
 def parse_compose_ps(raw_output: str) -> list[dict]:
-    """Parse Docker Compose JSON output (array or newline-delimited JSON)."""
+    """Parse Compose JSON output and reject invalid record structures."""
     raw_output = raw_output.strip()
 
     if not raw_output:
@@ -22,20 +22,33 @@ def parse_compose_ps(raw_output: str) -> list[dict]:
 
     try:
         data = json.loads(raw_output)
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict):
-            return [data]
     except json.JSONDecodeError:
-        pass
+        # Compose may emit newline-delimited JSON records.
+        records = []
+        for line in raw_output.splitlines():
+            line = line.strip()
+            if line:
+                record = json.loads(line)
+                if not isinstance(record, dict):
+                    raise ValueError(
+                        "Compose output contains a non-object record"
+                    )
+                records.append(record)
+        return records
 
-    records = []
-    for line in raw_output.splitlines():
-        line = line.strip()
-        if line:
-            records.append(json.loads(line))
+    if isinstance(data, dict):
+        return [data]
 
-    return records
+    if isinstance(data, list):
+        if not all(isinstance(record, dict) for record in data):
+            raise ValueError(
+                "Compose JSON array must contain only objects"
+            )
+        return data
+
+    raise ValueError(
+        "Compose JSON output must be an object or an array of objects"
+    )
 
 
 def evaluate_service(service_name: str, container: dict | None) -> ServiceResult:
