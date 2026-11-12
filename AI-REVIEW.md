@@ -1,142 +1,49 @@
-# AI Code Review: Defects Found in AI-Generated Code
+# AI Code Review
 
-During implementation, I tested AI-generated code against edge cases
-that were not covered by the initial happy-path tests.
+This document records three defects identified during AI-assisted code review and testing. Each issue was reproduced with a test before the corresponding fix was applied.
 
-Three behavioral defects were reproduced, fixed and covered by
-regression tests.
+## 1. Fragmented TCP responses
 
-## Defect 1: Assuming TCP responses arrive in one read
+**Problem:** The original protocol checks used a single `recv(1024)` call and assumed the complete server response would arrive in one read.
 
-**Fix commit:** `75b07b4`
+**Why it matters:** TCP is a stream protocol. A response can arrive in multiple chunks, so reading only once can produce an incomplete response and an incorrect failure.
 
-**Affected code:** `src/mailcow_doctor/protocols.py`
+**Reproduction:** Added tests using a fake socket that returns a protocol response in multiple chunks.
 
-### Original behavior
+**Fix:** Introduced `_recv_line()` to read until a newline, EOF, or the configured maximum size.
 
-The SMTP, IMAP and Redis probes used a single socket `recv()` call
-and assumed that it returned the complete protocol response.
+**Commit:** `75b07b4` — Fix protocol probes handling fragmented TCP responses.
 
-TCP is a byte stream. A response can arrive in multiple chunks.
-A valid response could therefore be incorrectly classified as a failure.
+**Test:** `tests/test_fragmented_protocols.py`
 
-### Reproduction
+## 2. Failed replicas hidden by healthy replicas
 
-Added `tests/test_fragmented_protocols.py`.
+**Problem:** Compose service results were stored by service name. When multiple containers represented the same service, a later healthy replica could overwrite an earlier failed replica.
 
-The tests simulated:
-- SMTP greeting split across multiple chunks.
-- Redis PONG response split across multiple chunks.
+**Why it matters:** The diagnostic tool could incorrectly report a service as healthy even when one of its replicas was failing.
 
-Both tests failed against the original implementation.
+**Reproduction:** Added tests with one healthy and one failed replica, testing both input orders.
 
-### Fix
+**Fix:** Evaluate every replica and aggregate the results using the worst status.
 
-Introduced `_recv_line()` to read until a newline is received, the
-connection closes, or the configured response-size limit is reached.
+**Commit:** `4adee75` — Prevent healthy Compose replicas hiding failed replicas.
 
-### Verification
+**Test:** `tests/test_duplicate_replicas.py`
 
-Both fragmented-response regression tests pass after the fix.
+## 3. Malformed Docker Compose JSON records
 
----
+**Problem:** The original parser accepted JSON structures without strictly validating that each record was an object representing a Compose container.
 
-## Defect 2: A healthy Compose replica could hide a failed replica
+**Why it matters:** Unexpected JSON values could enter the evaluation logic and cause confusing results or runtime errors.
 
-**Fix commit:** `4adee75`
+**Reproduction:** Added tests for scalar JSON values, arrays containing non-object values, and malformed newline-delimited records.
 
-**Affected code:** `src/mailcow_doctor/checks.py`
+**Fix:** Validate the top-level JSON structure and every record. Raise a clear `ValueError` for invalid input.
 
-### Original behavior
+**Commit:** `5bd1c8c` — Reject malformed Docker Compose JSON records.
 
-The implementation stored containers in a dictionary keyed by
-Compose service name.
+**Test:** `tests/test_malformed_compose.py`
 
-When multiple containers belonged to the same service, the last
-container overwrote the previous one.
+## Review takeaway
 
-A healthy replica could therefore hide an exited or unhealthy replica.
-
-### Reproduction
-
-Added `tests/test_duplicate_replicas.py`.
-
-The test supplied:
-1. An exited Redis replica.
-2. A healthy Redis replica.
-
-The original implementation returned PASS instead of FAIL.
-
-Reversing the order exposed the overwrite behavior.
-
-### Fix
-
-Changed service evaluation to retain and evaluate every replica.
-
-The service receives the worst status among its replicas.
-
-### Verification
-
-Regression tests cover both replica orderings and the case where
-all replicas are healthy.
-
----
-
-## Defect 3: Valid JSON with an invalid record structure was accepted
-
-**Fix commit:** `5bd1c8c`
-
-**Affected code:** `src/mailcow_doctor/checks.py`
-
-### Original behavior
-
-The parser accepted valid JSON values such as:
-- A number: `42`
-- A string: `"unexpected"`
-- An array containing a mixture of objects and numbers.
-
-These values are valid JSON but are not valid Docker Compose
-container records.
-
-Downstream code expects dictionaries and could fail unexpectedly
-when accessing container fields.
-
-### Reproduction
-
-Added `tests/test_malformed_compose.py`.
-
-Three cases were tested:
-- JSON number.
-- JSON string.
-- Array containing a non-object record.
-
-All three tests failed against the original parser because it
-did not reject these structures.
-
-### Fix
-
-Added explicit structural validation.
-
-The parser now accepts:
-- A JSON object.
-- An array containing only JSON objects.
-- Newline-delimited JSON objects.
-
-Invalid record structures raise ValueError.
-
-### Verification
-
-All three malformed-input regression tests pass after the fix.
-
----
-
-## Summary
-
-| Defect | Regression test | Fix commit |
-|---|---|---|
-| Fragmented TCP responses | `test_fragmented_protocols.py` | `75b07b4` |
-| Duplicate service replicas | `test_duplicate_replicas.py` | `4adee75` |
-| Invalid Compose JSON records | `test_malformed_compose.py` | `5bd1c8c` |
-
-These defects were identified through behavioral testing rather than
-naming, formatting or style review.
+These issues showed that diagnostic code needs to handle imperfect real-world inputs, not just the happy path. The fixes were accompanied by regression tests so that the same defects are less likely to return.
