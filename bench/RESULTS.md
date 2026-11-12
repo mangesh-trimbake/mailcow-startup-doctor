@@ -12,13 +12,13 @@
 | Metric | Before: separate commands | After: consolidated CLI |
 |---|---:|---:|
 | Runs | 5 | 5 |
-| Median | 2910.88 ms | 1653.56 ms |
-| Minimum | 2249.90 ms | 1472.47 ms |
-| Maximum | 4250.38 ms | 2061.60 ms |
+| Median | 3385.08 ms | 2066.39 ms |
+| Minimum | 2285.76 ms | 1588.41 ms |
+| Maximum | 5010.20 ms | 4947.76 ms |
 
-Median execution-time reduction: 1257.32 ms (43.2%).
+Median execution-time reduction: 1318.69 ms (39.0%).
 
-Relative speedup: 1.76x.
+Relative speedup: 1.64x.
 
 ## Method
 
